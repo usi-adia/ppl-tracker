@@ -110,6 +110,13 @@ h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
   border-color: rgba(24,95,165,0.3);
   color: #185fa5;
 }
+.last {
+  margin-top: 10px; font-size: 12px; color: #95938c;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+}
+.last .lbl { font-weight: 500; color: #6b6b6b; }
+.last .v { font-variant-numeric: tabular-nums; }
+.last .v.miss { opacity: 0.4; }
 .rest {
   padding: 3rem 1.5rem; text-align: center;
   background: #fff; border: 1px solid #e8e6df; border-radius: 12px;
@@ -123,6 +130,8 @@ h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
   .set .rm:active { background: #3a3633; }
   .add-set { border-color: #4a4642; color: #a8a59f; }
   .add-set:active { background: #2a2825; }
+  .last { color: #807d76; }
+  .last .lbl { color: #a8a59f; }
   .tab { border-color: #3a3633; color: #a8a59f; }
   .tab.active { background: #252321; border-color: #4a4642; color: #f5f3ee; }
   .tab .num, .summary b { color: #f5f3ee; }
@@ -228,8 +237,26 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 function load() {
   try { const r = localStorage.getItem(KEY); if (r) progress = JSON.parse(r); }
   catch(e) { progress = {}; }
+  for (const k in progress) {
+    const v = progress[k];
+    if (Array.isArray(v)) progress[k] = { current: v, last: [], date: today() };
+  }
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(progress)); } catch(e) {} }
+function today() { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function entry(key) {
+  if (!progress[key]) progress[key] = { current: [], last: [], date: today() };
+  return progress[key];
+}
+function rollIfNewDay(key) {
+  const e = entry(key);
+  const t = today();
+  if (e.date !== t && e.current.some(v => v && v !== '')) {
+    e.last = e.current;
+    e.current = [];
+  }
+  e.date = t;
+}
 
 function renderTabs() {
   document.getElementById('tabs').innerHTML = days.map((d, i) =>
@@ -255,8 +282,10 @@ function render() {
   let html = `<div class="day-head"><span class="dot" style="background:${d.color}"></span><div class="day-title">${esc(d.name)}</div></div><div class="day-sub">${esc(d.sub)}</div>`;
   d.exercises.forEach((ex, exi) => {
     const key = `${d.id}-${exi}`;
-    const vals = progress[key] || [];
-    const count = Math.max(ex.s, vals.length);
+    const e = progress[key] || { current: [], last: [], date: '' };
+    const vals = e.current || [];
+    const last = e.last || [];
+    const count = Math.max(ex.s, vals.length, last.length);
     const allDone = count > 0 && Array.from({length: count}).every((_, i) => vals[i] && vals[i] !== '');
     html += `<div class="ex ${allDone?'done':''}">
       <div class="ex-top">
@@ -275,31 +304,40 @@ function render() {
       </div>`;
     }
     html += `<button class="add-set" title="Add set" onclick="addSet('${key}')">+</button>`;
-    html += `</div></div>`;
+    html += `</div>`;
+    if (last.some(v => v && v !== '')) {
+      const cells = last.map(v => (v && v !== '')
+        ? `<span class="v">${esc(v)}</span>`
+        : `<span class="v miss">–</span>`).join(' · ');
+      html += `<div class="last"><span class="lbl">Last:</span> ${cells}</div>`;
+    }
+    html += `</div>`;
   });
   c.innerHTML = html;
   updateProgress();
 }
 
 function update(key, si, val) {
-  if (!progress[key]) progress[key] = [];
-  progress[key][si] = val;
+  rollIfNewDay(key);
+  const e = entry(key);
+  const rolled = e.current.length === 0;
+  e.current[si] = val;
   save();
-  updateProgress();
-  refreshCards();
+  if (rolled) render(); else { updateProgress(); refreshCards(); }
 }
 
 function addSet(key) {
-  if (!progress[key]) progress[key] = [];
-  progress[key].push('');
+  rollIfNewDay(key);
+  entry(key).current.push('');
   save();
   render();
 }
 
 function removeSet(key, si) {
   if (!progress[key]) return;
-  progress[key].splice(si, 1);
-  if (progress[key].length === 0) delete progress[key];
+  const e = progress[key];
+  e.current.splice(si, 1);
+  if (e.current.length === 0 && (!e.last || e.last.every(v => !v || v === ''))) delete progress[key];
   save();
   render();
 }
@@ -309,9 +347,9 @@ function refreshCards() {
   const cards = document.querySelectorAll('.ex');
   d.exercises.forEach((ex, exi) => {
     const key = `${d.id}-${exi}`;
-    const vals = progress[key] || [];
-    const count = Math.max(ex.s, vals.length);
-    const allDone = count > 0 && Array.from({length: count}).every((_, i) => vals[i] && vals[i] !== '');
+    const e = progress[key] || { current: [], last: [] };
+    const count = Math.max(ex.s, e.current.length, (e.last || []).length);
+    const allDone = count > 0 && Array.from({length: count}).every((_, i) => e.current[i] && e.current[i] !== '');
     if (cards[exi]) cards[exi].classList.toggle('done', allDone);
   });
 }
@@ -322,10 +360,10 @@ function updateProgress() {
   let total = 0, done = 0;
   d.exercises.forEach((ex, exi) => {
     const key = `${d.id}-${exi}`;
-    const vals = progress[key] || [];
-    const count = Math.max(ex.s, vals.length);
+    const e = progress[key] || { current: [], last: [] };
+    const count = Math.max(ex.s, e.current.length, (e.last || []).length);
     total += count;
-    for (let si = 0; si < count; si++) if (vals[si] && vals[si] !== '') done++;
+    for (let si = 0; si < count; si++) if (e.current[si] && e.current[si] !== '') done++;
   });
   const pct = total > 0 ? Math.round((done/total)*100) : 0;
   document.getElementById('pf').style.width = pct + '%';
@@ -333,9 +371,9 @@ function updateProgress() {
 }
 
 function resetWeek() {
-  if (!confirm('Clear all logged sets for the week?')) return;
-  progress = {};
-  try { localStorage.removeItem(KEY); } catch(e) {}
+  if (!confirm('Clear current sets? "Last session" history will be kept.')) return;
+  for (const k in progress) progress[k].current = [];
+  save();
   render();
 }
 
